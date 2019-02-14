@@ -206,6 +206,16 @@ def _is_vs_2017(vc_path):
   # C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\
   return vc_path.find("2017") != -1
 
+def _is_vs_9(vc_path):
+  """Check if the installed VS version is Visual Studio 9."""
+  return vc_path.find("Visual Studio 9.") != -1
+
+def _amd64_x86_param(vc_path):
+    return "x86" if _is_vs_9(vc_path) else "amd64_x86"
+
+def _amd64_x86_path(vc_path):
+    return "" if _is_vs_9(vc_path) else "amd64_x86\\"
+
 def _find_vcvarsall_bat_script(repository_ctx, vc_path):
   """Find vcvarsall.bat script. Doesn't %-escape the result."""
   if _is_vs_2017(vc_path):
@@ -223,7 +233,7 @@ def setup_vc_env_vars(repository_ctx, vc_path, architecture):
   vcvarsall = _find_vcvarsall_bat_script(repository_ctx, vc_path)
   if not vcvarsall:
     return None
-  argument = "x64" if architecture == "x64_windows" else "amd64_x86" # Cross-compiler.
+  argument = "x64" if architecture == "x64_windows" else _amd64_x86_param(vc_path) # Cross-compiler.
   repository_ctx.file("get_env.bat",
                       "@echo off\n" +
                       "call \"" + vcvarsall + "\" " + argument + " > NUL \n" +
@@ -260,7 +270,7 @@ def find_msvc_tool(repository_ctx, vc_path, architecture, tool):
   else:
     # For VS 2015 and older version, the tools are under:
     # C:\Program Files (x86)\Microsoft Visual Studio 14.0\VC\bin{,\amd64}
-    subfolder = "amd64\\" if architecture == "x64_windows" else "amd64_x86\\"
+    subfolder = "amd64\\" if architecture == "x64_windows" else _amd64_x86_path(vc_path)
     tool_path = vc_path + "\\bin\\" + subfolder + tool
 
   if not repository_ctx.path(tool_path).exists:
@@ -280,19 +290,19 @@ def _find_missing_vc_tools(repository_ctx, vc_path, architecture):
 
   return missing_tools
 
-def _is_support_whole_archive(repository_ctx, vc_path, architecture):
+def _is_support_whole_archive(repository_ctx, vc_path, architecture, environment = None):
   """Run MSVC linker alone to see if it supports /WHOLEARCHIVE."""
   env = repository_ctx.os.environ
   if "NO_WHOLE_ARCHIVE_OPTION" in env and env["NO_WHOLE_ARCHIVE_OPTION"] == "1":
     return False
   linker = find_msvc_tool(repository_ctx, vc_path, architecture, "link.exe")
-  result = execute(repository_ctx, [linker], expect_failure = True)
+  result = execute(repository_ctx, [linker], expect_failure = True, environment = environment)
   return result.find("/WHOLEARCHIVE") != -1
 
-def _is_support_debug_fastlink(repository_ctx, vc_path, architecture):
+def _is_support_debug_fastlink(repository_ctx, vc_path, architecture, environment = None):
   """Run MSVC linker alone to see if it supports /DEBUG:FASTLINK."""
   linker = find_msvc_tool(repository_ctx, vc_path, architecture, "link.exe")
-  result = execute(repository_ctx, [linker], expect_failure = True)
+  result = execute(repository_ctx, [linker], expect_failure = True, environment = environment)
   return result.find("/DEBUG[:{FASTLINK|FULL|NONE}]") != -1
 
 def _is_use_msvc_wrapper(repository_ctx):
@@ -389,7 +399,7 @@ def _get_toolchain_options(repository_ctx, vc_path, architecture, toolchain_name
   compilation_mode_content = ""
 
   if _is_use_msvc_wrapper(repository_ctx):
-    if _is_support_whole_archive(repository_ctx, vc_path, architecture):
+    if _is_support_whole_archive(repository_ctx, vc_path, architecture, environment=env):
       support_whole_archive = "True"
     else:
       support_whole_archive = "False"
@@ -422,7 +432,7 @@ def _get_toolchain_options(repository_ctx, vc_path, architecture, toolchain_name
     if path:
       escaped_cxx_include_directories.append("cxx_builtin_include_directory: \"%s\"" % path)
 
-  support_debug_fastlink = _is_support_debug_fastlink(repository_ctx, vc_path, architecture)
+  support_debug_fastlink = _is_support_debug_fastlink(repository_ctx, vc_path, architecture, environment=env)
   return _architecture_specific_dict({
       "%{toolchain_name}": toolchain_name,
       "%{msvc_env_tmp}": escaped_tmp_dir,
